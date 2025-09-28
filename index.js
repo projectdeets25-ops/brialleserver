@@ -5,7 +5,8 @@ const express = require("express");
 const multer = require("multer");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { saveNotes, getAllNotes, getNoteById, deleteNote } = require("./controllers/noteController");
+const { saveNotes } = require("./controllers/noteController");
+const notesRoutes = require("./routes/notes");
 const SYSTEM_INSTRUCTION = require("./config/systemInstruction");
 
 const app = express();
@@ -229,40 +230,16 @@ app.post("/generate-notes", upload.fields([
   }
 });
 
-// --- Notes Management Endpoints ---
-
-// Get all notes
-app.get("/api/notes", (req, res) => {
+// --- Notes Management Routes ---
+app.use("/api/notes", (req, res, next) => {
   if (!isDatabaseConnected) {
     return res.status(503).json({
       status: "error",
       message: "Database not connected. Notes management unavailable."
     });
   }
-  getAllNotes(req, res);
-});
-
-// Get a specific note by ID
-app.get("/api/notes/:id", (req, res) => {
-  if (!isDatabaseConnected) {
-    return res.status(503).json({
-      status: "error",
-      message: "Database not connected. Notes management unavailable."
-    });
-  }
-  getNoteById(req, res);
-});
-
-// Delete a note by ID
-app.delete("/api/notes/:id", (req, res) => {
-  if (!isDatabaseConnected) {
-    return res.status(503).json({
-      status: "error",
-      message: "Database not connected. Notes management unavailable."
-    });
-  }
-  deleteNote(req, res);
-});
+  next();
+}, notesRoutes);
 
 // Global variable to track database connection status
 let isDatabaseConnected = false;

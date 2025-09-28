@@ -17,13 +17,75 @@ const saveNotes = async (noteData) => {
   }
 };
 
-// Get all notes
+
+// Get all notes with comprehensive filtering (search, date filter, pagination)
 const getAllNotes = async (req, res) => {
   try {
-    const notes = await Note.find().sort({ createdAt: -1 });
+    // Extract query parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    
+    // Build query object
+    let query = {};
+    let appliedFilters = {};
+    
+    // Date filtering
+    if (req.query.startDate || req.query.endDate) {
+      query.createdAt = {};
+      if (req.query.startDate) {
+        query.createdAt.$gte = new Date(req.query.startDate);
+        appliedFilters.startDate = req.query.startDate;
+      }
+      if (req.query.endDate) {
+        query.createdAt.$lte = new Date(req.query.endDate);
+        appliedFilters.endDate = req.query.endDate;
+      }
+    }
+    
+    // Search functionality (supports both 'search' and 'q' parameters)
+    const searchTerm = req.query.search || req.query.q;
+    if (searchTerm) {
+      query.$or = [
+        { generatedNotes: { $regex: searchTerm, $options: 'i' } },
+        { inputType: { $regex: searchTerm, $options: 'i' } }
+      ];
+      appliedFilters.search = searchTerm;
+    }
+    
+    // Input type filtering
+    if (req.query.inputType) {
+      query.inputType = req.query.inputType;
+      appliedFilters.inputType = req.query.inputType;
+    }
+    
+    // Sort order (default: newest first)
+    const sortOrder = req.query.sort === 'asc' ? 1 : -1;
+    const sortField = req.query.sortBy || 'createdAt';
+    
+    // Get total count for pagination
+    const totalCount = await Note.countDocuments(query);
+    
+    // Get notes with pagination
+    const notes = await Note.find(query)
+      .sort({ [sortField]: sortOrder })
+      .skip(skip)
+      .limit(limit)
+      .select('inputType generatedNotes createdAt updatedAt');
+    
+    const totalPages = Math.ceil(totalCount / limit);
+    
     res.json({
       status: 'success',
-      count: notes.length,
+      appliedFilters: appliedFilters,
+      pagination: {
+        currentPage: page,
+        totalPages: totalPages,
+        totalCount: totalCount,
+        limit: limit,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      },
       notes: notes
     });
   } catch (error) {

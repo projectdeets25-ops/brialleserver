@@ -5,6 +5,11 @@ The output MUST include:
 2. An Introduction (1-2 sentences).
 3. The main content organized with bolded Level 2 Headings (## Heading), bullet points, and numbered lists where appropriate.
 4. Key Definitions highlighted at the end.
+If the source material (e.g., an audio transcript) contains mathematical expressions, equations, or formulas, they must be properly included in the notes within the relevant sections, written in clear mathematical notation and integrated into explanatory paragraphs. 
 Do not include any preamble, just start with the Title.`;
 
+
+
 module.exports = SYSTEM_INSTRUCTION;
+
+// The final output language MUST be in Kannada.
