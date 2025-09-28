@@ -9,11 +9,6 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.env
-*.venv
-env/
-venv/
-ENV/
 build/
 dist/
 *.egg-info/
@@ -29,10 +24,6 @@ Thumbs.db
 # Logs
 *.log
 
-# Environment files
-.env
-.env.local
-.env.*.local
 
 # Compiled files
 *.class

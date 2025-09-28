@@ -11,18 +11,21 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.GEMINI_API_KEY;
 
-// Database connection functionn
+// Database connection function
 const connectDB = async () => {
     try {
         const mongoUri = process.env.MONGO_URI;
         if (!mongoUri) {
-            throw new Error('MONGO_URI environment variable is not set. Please check your .env file.');
+            console.warn('⚠️ MONGO_URI environment variable is not set. Database features will be disabled.');
+            return false;
         }
         await mongoose.connect(mongoUri);
         console.log('✅ MongoDB Connected Successfully');
+        return true;
     } catch (error) {
         console.error('❌ MongoDB Connection Error:', error.message);
-        process.exit(1); // Exit process on failure
+        console.warn('⚠️ Continuing without database connection...');
+        return false;
     }
 };
 
@@ -189,28 +192,40 @@ app.post("/generate-notes", upload.fields([
       generated_notes: generatedNotes
     };
 
-    // Save notes to database
-    try {
-      const savedNote = await saveNotes(noteData);
-      
-      res.json({
-        status: "success",
-        input_type: type,
-        model_used: GEMINI_MODEL,
-        generated_notes: generatedNotes,
-        note_id: savedNote._id,
-        saved_at: savedNote.createdAt
-      });
-    } catch (dbError) {
-      console.error("Database save error:", dbError);
-      // Still return the generated notes even if database save fails
+    // Save notes to database (if connected)
+    if (isDatabaseConnected) {
+      try {
+        const savedNote = await saveNotes(noteData);
+        
+        res.json({
+          status: "success",
+          input_type: type,
+          model_used: GEMINI_MODEL,
+          generated_notes: generatedNotes,
+          note_id: savedNote._id,
+          saved_at: savedNote.createdAt
+        });
+      } catch (dbError) {
+        console.error("Database save error:", dbError);
+        // Still return the generated notes even if database save fails
+        res.json({
+          status: "success",
+          input_type: type,
+          model_used: GEMINI_MODEL,
+          generated_notes: generatedNotes,
+          note_id: null,
+          save_error: "Notes generated but failed to save to database"
+        });
+      }
+    } else {
+      // Database not connected, return notes without saving
       res.json({
         status: "success",
         input_type: type,
         model_used: GEMINI_MODEL,
         generated_notes: generatedNotes,
         note_id: null,
-        save_error: "Notes generated but failed to save to database"
+        database_status: "Database not connected - notes not saved"
       });
     }
   } catch (error) {
@@ -225,24 +240,52 @@ app.post("/generate-notes", upload.fields([
 // --- Notes Management Endpoints ---
 
 // Get all notes
-app.get("/api/notes", getAllNotes);
+app.get("/api/notes", (req, res) => {
+  if (!isDatabaseConnected) {
+    return res.status(503).json({
+      status: "error",
+      message: "Database not connected. Notes management unavailable."
+    });
+  }
+  getAllNotes(req, res);
+});
 
 // Get a specific note by ID
-app.get("/api/notes/:id", getNoteById);
+app.get("/api/notes/:id", (req, res) => {
+  if (!isDatabaseConnected) {
+    return res.status(503).json({
+      status: "error",
+      message: "Database not connected. Notes management unavailable."
+    });
+  }
+  getNoteById(req, res);
+});
 
 // Delete a note by ID
-app.delete("/api/notes/:id", deleteNote);
+app.delete("/api/notes/:id", (req, res) => {
+  if (!isDatabaseConnected) {
+    return res.status(503).json({
+      status: "error",
+      message: "Database not connected. Notes management unavailable."
+    });
+  }
+  deleteNote(req, res);
+});
+
+// Global variable to track database connection status
+let isDatabaseConnected = false;
 
 // --- Start Server ---
 const startServer = async () => {
   try {
-    // Connect to database first
-    await connectDB();
+    // Try to connect to database (optional for serverless)
+    isDatabaseConnected = await connectDB();
     
     // Start the server
     app.listen(PORT, () => {
       console.log(`\n✅ AI Notes Maker Server running at http://localhost:${PORT}`);
       console.log(`Model in use: ${GEMINI_MODEL}`);
+      console.log(`Database: ${isDatabaseConnected ? 'Connected' : 'Not connected'}`);
       console.log(`\nReady to receive POST requests at /generate-notes`);
     });
   } catch (error) {
@@ -251,5 +294,10 @@ const startServer = async () => {
   }
 };
 
-// Start the application
-startServer();
+// For Vercel serverless, export the app directly
+if (process.env.NODE_ENV === 'production') {
+  module.exports = app;
+} else {
+  // Start the application locally
+  startServer();
+}
