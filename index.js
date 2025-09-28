@@ -11,7 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.GEMINI_API_KEY;
 
-// Database connection function
+// Database connection functionn
 const connectDB = async () => {
     try {
         const mongoUri = process.env.MONGO_URI;
