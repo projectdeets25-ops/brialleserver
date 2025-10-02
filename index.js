@@ -172,20 +172,137 @@ app.post("/generate-notes", upload.fields([
   try {
     let userPrompt = "";
     let audioFile = null;
+    let detectedLanguage = "unknown";
+    let detectedSubject = "General";
+
+    // Function to detect language from text content
+    const detectLanguage = async (text) => {
+      try {
+        const detectionResult = await model.generateContent({
+          contents: [{ 
+            role: "user", 
+            parts: [{ 
+              text: `Identify the language of this text. Respond with ONLY the language name in English (e.g., "English", "Spanish", "French", "Hindi", "Kannada", "Tamil", "Telugu", "Bengali", "Gujarati", "Marathi", "Punjabi", "Chinese", "Japanese", "Korean", "Arabic", "German", "Italian", "Portuguese", "Russian", etc.). Do not include any other text or explanation:
+
+"${text.substring(0, 500)}"` 
+            }] 
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 20,
+          },
+        });
+        const detectedLang = detectionResult.response.text().trim();
+        // Clean up any extra text that might come with the response
+        const cleanLang = detectedLang.split('\n')[0].split('.')[0].trim();
+        console.log("Raw language detection:", detectedLang);
+        console.log("Cleaned language:", cleanLang);
+        return cleanLang;
+      } catch (error) {
+        console.warn("Language detection failed:", error.message);
+        return "unknown";
+      }
+    };
+
+    // Function to detect subject from text content
+    const detectSubject = async (text) => {
+      try {
+        const subjectResult = await model.generateContent({
+          contents: [{ 
+            role: "user", 
+            parts: [{ 
+              text: `Analyze this text and identify the academic subject it belongs to. Respond with ONLY one of these subjects: "Mathematics", "Physics", "Chemistry", "Biology", "Programming", "Computer Science", "History", "Geography", "Literature", "Language", "Art", "Music", "Sports", "Entertainment", "General". Do not include any other text or explanation:
+
+"${text.substring(0, 500)}"` 
+            }] 
+          }],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 20,
+          },
+        });
+        const detectedSubj = subjectResult.response.text().trim();
+        // Clean up any extra text that might come with the response
+        const cleanSubj = detectedSubj.split('\n')[0].split('.')[0].trim();
+        console.log("Raw subject detection:", detectedSubj);
+        console.log("Cleaned subject:", cleanSubj);
+        return cleanSubj;
+      } catch (error) {
+        console.warn("Subject detection failed:", error.message);
+        return "General";
+      }
+    };
 
     if (type === "text") {
       console.log("Processing text notes...");
-      userPrompt = `Elaborate and organize the following professor's notes: "${content}"`;
+      
+      // Detect language and subject from text content
+      detectedLanguage = await detectLanguage(content);
+      detectedSubject = await detectSubject(content);
+      console.log("Detected language:", detectedLanguage);
+      console.log("Detected subject:", detectedSubject);
+      
+      // If language detection failed, try to detect again with a different approach
+      if (detectedLanguage === "unknown" || detectedLanguage.includes("English") || detectedLanguage.includes("##")) {
+        console.log("Retrying language detection with different approach...");
+        detectedLanguage = await detectLanguage(content);
+        console.log("Retry detected language:", detectedLanguage);
+      }
+      
+      userPrompt = `You are an expert academic note-taker specializing in ${detectedSubject}. Please elaborate and organize the following professor's notes into comprehensive, well-structured academic notes.
+
+🚨 CRITICAL LANGUAGE REQUIREMENT 🚨
+The input text is written in ${detectedLanguage}. 
+You MUST write your ENTIRE response in ${detectedLanguage} ONLY.
+Do NOT use English or any other language.
+Every single word, sentence, and paragraph must be in ${detectedLanguage}.
+If you write even one word in English, you have FAILED this task.
+
+📚 SUBJECT FOCUS: ${detectedSubject}
+Focus on creating notes that are relevant to ${detectedSubject} and use appropriate terminology and concepts from this field.
+
+Input text in ${detectedLanguage}: "${content}"
+
+Generate detailed, organized academic notes in ${detectedLanguage} language only, focusing on ${detectedSubject}. Remember: ${detectedLanguage} ONLY!`;
 
     } else if (type === "audio") {
       console.log("Processing audio file...");
       if (typeof content === 'object' && content.buffer) {
         // Audio file was uploaded
         audioFile = content;
-        userPrompt = `Please transcribe this audio file and then generate comprehensive academic notes from the transcript. The audio file is: ${content.originalname} (${content.mimetype})`;
+        userPrompt = `You are an expert academic note-taker. Please transcribe this audio file and then generate comprehensive academic notes from the transcript.
+
+🚨 CRITICAL LANGUAGE REQUIREMENT 🚨
+You MUST detect the language of the audio content and generate your response ENTIRELY in that same language. Do NOT translate anything to English or any other language. Every single word of your response must be in the original language of the audio.
+
+📚 SUBJECT DETECTION
+Also identify the academic subject (Mathematics, Physics, Chemistry, Biology, Programming, Computer Science, History, Geography, Literature, Language, Art, Music, Sports, Entertainment, or General) and focus your notes accordingly.
+
+Audio file: ${content.originalname} (${content.mimetype})
+
+Generate detailed, organized academic notes in the original language of the audio only.`;
       } else {
         // Text content provided for audio type
-        userPrompt = `Generate comprehensive academic notes from the following audio transcript: "${content}"`;
+        detectedLanguage = await detectLanguage(content);
+        detectedSubject = await detectSubject(content);
+        console.log("Detected language from transcript:", detectedLanguage);
+        console.log("Detected subject from transcript:", detectedSubject);
+        
+        userPrompt = `You are an expert academic note-taker specializing in ${detectedSubject}. Generate comprehensive academic notes from the following audio transcript.
+
+🚨 CRITICAL LANGUAGE REQUIREMENT 🚨
+The transcript is written in ${detectedLanguage}. 
+You MUST write your ENTIRE response in ${detectedLanguage} ONLY.
+Do NOT use English or any other language.
+Every single word, sentence, and paragraph must be in ${detectedLanguage}.
+If you write even one word in English, you have FAILED this task.
+
+📚 SUBJECT FOCUS: ${detectedSubject}
+Focus on creating notes that are relevant to ${detectedSubject} and use appropriate terminology and concepts from this field.
+
+Audio transcript in ${detectedLanguage}: "${content}"
+
+Generate detailed, organized academic notes in ${detectedLanguage} language only, focusing on ${detectedSubject}. Remember: ${detectedLanguage} ONLY!`;
       }
 
     } else {
@@ -230,12 +347,44 @@ app.post("/generate-notes", upload.fields([
       });
     }
 
-    const generatedNotes = result.response.text();
+    let generatedNotes = result.response.text();
+
+    // Validate and ensure the generated notes are in the correct language
+    // Decide the target language: if detection failed, force English
+    const targetLanguage = (detectedLanguage && detectedLanguage !== "unknown") ? detectedLanguage : 'English';
+    try {
+      const languageValidationResult = await model.generateContent({
+        contents: [{ 
+          role: "user", 
+          parts: [{ 
+            text: `🚨 URGENT LANGUAGE CORRECTION TASK 🚨\n\nThe following text should be written in ${targetLanguage}.\n\nYou MUST ensure the ENTIRE text is in ${targetLanguage} ONLY. Do NOT include words from other languages.\n\nOriginal text to correct:\n"${generatedNotes}"\n\nReturn ONLY the corrected text in ${targetLanguage}.` 
+          }] 
+        }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 2048,
+        },
+      });
+
+      const validatedNotes = languageValidationResult.response.text();
+      if (validatedNotes && validatedNotes.trim()) {
+        generatedNotes = validatedNotes.trim();
+        console.log("✅ Language validation and correction completed for", targetLanguage);
+      }
+    } catch (validationError) {
+      console.warn("Language validation failed, using original notes:", validationError.message);
+    }
+
+    // Ensure we store the language as the target language (English when unknown)
+    detectedLanguage = targetLanguage;
 
     // Prepare data for saving to database
     const noteData = {
       input_type: type,
-      generated_notes: generatedNotes
+      generated_notes: generatedNotes,
+      detected_language: detectedLanguage,
+      detected_subject: detectedSubject,
+      original_content: typeof content === 'string' ? content : (content.originalname || 'audio_file')
     };
 
     // Ensure database connection
@@ -250,6 +399,8 @@ app.post("/generate-notes", upload.fields([
           status: "success",
           input_type: type,
           model_used: GEMINI_MODEL,
+          detected_language: detectedLanguage,
+          detected_subject: detectedSubject,
           generated_notes: generatedNotes,
           note_id: savedNote._id,
           saved_at: savedNote.createdAt
@@ -261,6 +412,8 @@ app.post("/generate-notes", upload.fields([
           status: "success",
           input_type: type,
           model_used: GEMINI_MODEL,
+          detected_language: detectedLanguage,
+          detected_subject: detectedSubject,
           generated_notes: generatedNotes,
           note_id: null,
           save_error: "Notes generated but failed to save to database"
@@ -272,6 +425,8 @@ app.post("/generate-notes", upload.fields([
         status: "success",
         input_type: type,
         model_used: GEMINI_MODEL,
+        detected_language: detectedLanguage,
+        detected_subject: detectedSubject,
         generated_notes: generatedNotes,
         note_id: null,
         database_status: "Database not connected - notes not saved"

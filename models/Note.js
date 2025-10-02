@@ -10,6 +10,18 @@ const noteSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  detectedLanguage: {
+    type: String,
+    default: 'unknown'
+  },
+  detectedSubject: {
+    type: String,
+    default: 'General'
+  },
+  originalContent: {
+    type: String,
+    default: ''
+  },
   createdAt: {
     type: Date,
     default: Date.now

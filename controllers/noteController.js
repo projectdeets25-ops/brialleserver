@@ -5,7 +5,10 @@ const saveNotes = async (noteData) => {
   try {
     const note = new Note({
       inputType: noteData.input_type,
-      generatedNotes: noteData.generated_notes
+      generatedNotes: noteData.generated_notes,
+      detectedLanguage: noteData.detected_language || 'unknown',
+      detectedSubject: noteData.detected_subject || 'General',
+      originalContent: noteData.original_content || ''
     });
 
     const savedNote = await note.save();
@@ -48,7 +51,10 @@ const getAllNotes = async (req, res) => {
     if (searchTerm) {
       query.$or = [
         { generatedNotes: { $regex: searchTerm, $options: 'i' } },
-        { inputType: { $regex: searchTerm, $options: 'i' } }
+        { inputType: { $regex: searchTerm, $options: 'i' } },
+        { detectedLanguage: { $regex: searchTerm, $options: 'i' } },
+        { detectedSubject: { $regex: searchTerm, $options: 'i' } },
+        { originalContent: { $regex: searchTerm, $options: 'i' } }
       ];
       appliedFilters.search = searchTerm;
     }
@@ -57,6 +63,18 @@ const getAllNotes = async (req, res) => {
     if (req.query.inputType) {
       query.inputType = req.query.inputType;
       appliedFilters.inputType = req.query.inputType;
+    }
+    
+    // Language filtering
+    if (req.query.language) {
+      query.detectedLanguage = { $regex: req.query.language, $options: 'i' };
+      appliedFilters.language = req.query.language;
+    }
+    
+    // Subject filtering
+    if (req.query.subject) {
+      query.detectedSubject = { $regex: req.query.subject, $options: 'i' };
+      appliedFilters.subject = req.query.subject;
     }
     
     // Sort order (default: newest first)
@@ -71,7 +89,7 @@ const getAllNotes = async (req, res) => {
       .sort({ [sortField]: sortOrder })
       .skip(skip)
       .limit(limit)
-      .select('inputType generatedNotes createdAt updatedAt');
+      .select('inputType generatedNotes detectedLanguage detectedSubject originalContent createdAt updatedAt');
     
     const totalPages = Math.ceil(totalCount / limit);
     
@@ -122,6 +140,70 @@ const getNoteById = async (req, res) => {
   }
 };
 
+// Update a note by ID (all fields except inputType)
+const updateNote = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { generatedNotes, detectedLanguage, detectedSubject, originalContent } = req.body;
+
+    // Validate required fields
+    if (!generatedNotes) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'generatedNotes is required'
+      });
+    }
+
+    // Prepare update object (exclude inputType)
+    const updateData = {
+      generatedNotes,
+      updatedAt: new Date()
+    };
+
+    // Add optional fields if provided
+    if (detectedLanguage !== undefined) {
+      updateData.detectedLanguage = detectedLanguage;
+    }
+    if (detectedSubject !== undefined) {
+      updateData.detectedSubject = detectedSubject;
+    }
+    if (originalContent !== undefined) {
+      updateData.originalContent = originalContent;
+    }
+
+    // Find and update the note
+    const updatedNote = await Note.findByIdAndUpdate(
+      id,
+      updateData,
+      { 
+        new: true, // Return the updated document
+        runValidators: true // Run schema validators
+      }
+    );
+
+    if (!updatedNote) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Note not found'
+      });
+    }
+
+    console.log('✅ Note updated successfully:', updatedNote._id);
+    res.json({
+      status: 'success',
+      message: 'Note updated successfully',
+      note: updatedNote
+    });
+  } catch (error) {
+    console.error('❌ Error updating note:', error.message);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to update note',
+      error: error.message
+    });
+  }
+};
+
 // Delete a note by ID
 const deleteNote = async (req, res) => {
   try {
@@ -151,5 +233,6 @@ module.exports = {
   saveNotes,
   getAllNotes,
   getNoteById,
+  updateNote,
   deleteNote
 };
