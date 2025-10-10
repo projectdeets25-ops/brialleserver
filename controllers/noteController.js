@@ -1,21 +1,129 @@
 const Note = require('../models/Note');
+const BrailleConverter = require('../utils/brailleConverter');
 
-// Save generated notes to database
+// Initialize Braille converter
+const brailleConverter = new BrailleConverter();
+
+// Save generated notes to database (multi-language support)
 const saveNotes = async (noteData) => {
   try {
     const note = new Note({
       inputType: noteData.input_type,
-      generatedNotes: noteData.generated_notes,
+      generatedNotes: {
+        english: noteData.generated_notes.english,
+        hindi: noteData.generated_notes.hindi,
+        braille: noteData.generated_notes.braille
+      },
       detectedLanguage: noteData.detected_language || 'unknown',
       detectedSubject: noteData.detected_subject || 'General',
-      originalContent: noteData.original_content || ''
+      originalContent: noteData.original_content || '',
+      processingMetadata: {
+        originalLanguage: noteData.original_language || 'unknown',
+        translationModel: noteData.model_used || 'gemini-2.5-flash-lite',
+        brailleGrade: 'Grade2',
+        processingTime: noteData.processing_time || 0
+      }
     });
 
     const savedNote = await note.save();
-    console.log('✅ Notes saved to database:', savedNote._id);
+    console.log('✅ Multi-language notes saved to database:', savedNote._id);
     return savedNote;
   } catch (error) {
-    console.error('❌ Error saving notes to database:', error.message);
+    console.error('❌ Error saving multi-language notes to database:', error.message);
+    throw error;
+  }
+};
+
+// Generate notes in multiple languages
+const generateMultiLanguageNotes = async (model, userPrompt, audioFile = null) => {
+  const startTime = Date.now();
+  const results = {};
+
+  try {
+    // Generate English notes
+    console.log('🔄 Generating English notes...');
+    const englishResult = await generateSingleLanguageNotes(model, userPrompt, 'english', audioFile);
+    results.english = englishResult;
+
+    // Generate Hindi notes
+    console.log('🔄 Generating Hindi notes...');
+    const hindiPrompt = `Translate the following English academic notes to Hindi while maintaining the same structure, formatting, and academic quality. Keep all technical terms accurate and use appropriate Hindi academic vocabulary:
+
+${englishResult}
+
+Generate the complete notes in Hindi with the same structure (Title, Introduction, Headings, Lists, Key Definitions).`;
+    
+    const hindiResult = await generateSingleLanguageNotes(model, hindiPrompt, 'hindi');
+    results.hindi = hindiResult;
+
+    // Generate Braille notes (convert English to Braille)
+    console.log('🔄 Converting English notes to Braille...');
+    const brailleResult = brailleConverter.convertAcademicNotes(englishResult);
+    results.braille = brailleResult;
+
+    // Validate Braille conversion
+    if (!brailleConverter.isValidBraille(brailleResult)) {
+      console.warn('⚠️ Braille conversion may have issues, using fallback...');
+      results.braille = brailleConverter.textToBraille(englishResult, true);
+    }
+
+    const processingTime = Date.now() - startTime;
+    console.log(`✅ Multi-language generation completed in ${processingTime}ms`);
+
+    return {
+      ...results,
+      processingTime
+    };
+
+  } catch (error) {
+    console.error('❌ Error in multi-language generation:', error.message);
+    throw error;
+  }
+};
+
+// Generate notes in a single language
+const generateSingleLanguageNotes = async (model, prompt, language = 'english', audioFile = null) => {
+  try {
+    let result;
+    
+    if (audioFile) {
+      // Include audio file in the request
+      result = await model.generateContent({
+        contents: [{ 
+          role: "user", 
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: audioFile.mimetype,
+                data: audioFile.buffer.toString('base64')
+              }
+            }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.2,
+          topK: 40,
+          topP: 0.8,
+          maxOutputTokens: 2048,
+        },
+      });
+    } else {
+      // Text-only request
+      result = await model.generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          topK: 40,
+          topP: 0.8,
+          maxOutputTokens: 2048,
+        },
+      });
+    }
+
+    return result.response.text();
+  } catch (error) {
+    console.error(`❌ Error generating ${language} notes:`, error.message);
     throw error;
   }
 };
@@ -50,7 +158,9 @@ const getAllNotes = async (req, res) => {
     const searchTerm = req.query.search || req.query.q;
     if (searchTerm) {
       query.$or = [
-        { generatedNotes: { $regex: searchTerm, $options: 'i' } },
+        { 'generatedNotes.english': { $regex: searchTerm, $options: 'i' } },
+        { 'generatedNotes.hindi': { $regex: searchTerm, $options: 'i' } },
+        { 'generatedNotes.braille': { $regex: searchTerm, $options: 'i' } },
         { inputType: { $regex: searchTerm, $options: 'i' } },
         { detectedLanguage: { $regex: searchTerm, $options: 'i' } },
         { detectedSubject: { $regex: searchTerm, $options: 'i' } },
@@ -89,7 +199,7 @@ const getAllNotes = async (req, res) => {
       .sort({ [sortField]: sortOrder })
       .skip(skip)
       .limit(limit)
-      .select('inputType generatedNotes detectedLanguage detectedSubject originalContent createdAt updatedAt');
+      .select('inputType generatedNotes detectedLanguage detectedSubject originalContent processingMetadata createdAt updatedAt');
     
     const totalPages = Math.ceil(totalCount / limit);
     
@@ -146,19 +256,32 @@ const updateNote = async (req, res) => {
     const { id } = req.params;
     const { generatedNotes, detectedLanguage, detectedSubject, originalContent } = req.body;
 
-    // Validate required fields
-    if (!generatedNotes) {
+    // Validate required fields - now expecting multi-language structure
+    if (!generatedNotes || (!generatedNotes.english && !generatedNotes.hindi && !generatedNotes.braille)) {
       return res.status(400).json({
         status: 'error',
-        message: 'generatedNotes is required'
+        message: 'generatedNotes with at least one language (english, hindi, or braille) is required'
       });
     }
 
     // Prepare update object (exclude inputType)
     const updateData = {
-      generatedNotes,
       updatedAt: new Date()
     };
+
+    // Update generatedNotes if provided
+    if (generatedNotes) {
+      updateData.generatedNotes = {};
+      if (generatedNotes.english !== undefined) {
+        updateData['generatedNotes.english'] = generatedNotes.english;
+      }
+      if (generatedNotes.hindi !== undefined) {
+        updateData['generatedNotes.hindi'] = generatedNotes.hindi;
+      }
+      if (generatedNotes.braille !== undefined) {
+        updateData['generatedNotes.braille'] = generatedNotes.braille;
+      }
+    }
 
     // Add optional fields if provided
     if (detectedLanguage !== undefined) {
@@ -231,6 +354,8 @@ const deleteNote = async (req, res) => {
 
 module.exports = {
   saveNotes,
+  generateMultiLanguageNotes,
+  generateSingleLanguageNotes,
   getAllNotes,
   getNoteById,
   updateNote,

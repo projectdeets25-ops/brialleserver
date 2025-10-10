@@ -5,9 +5,9 @@ const express = require("express");
 const multer = require("multer");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { saveNotes } = require("./controllers/noteController");
+const { saveNotes, generateMultiLanguageNotes } = require("./controllers/noteController");
 const notesRoutes = require("./routes/notes");
-const SYSTEM_INSTRUCTION = require("./config/systemInstruction");
+const { SYSTEM_INSTRUCTIONS } = require("./config/systemInstructions");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -68,12 +68,28 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-// Initialize Gemini AI
+// Initialize Gemini AI with English system instruction as default
 const genAI = new GoogleGenerativeAI(API_KEY);
 const model = genAI.getGenerativeModel({ 
   model: GEMINI_MODEL,
-  systemInstruction: SYSTEM_INSTRUCTION
+  systemInstruction: SYSTEM_INSTRUCTIONS.ENGLISH
 });
+
+// Create models for different languages
+const models = {
+  english: genAI.getGenerativeModel({ 
+    model: GEMINI_MODEL,
+    systemInstruction: SYSTEM_INSTRUCTIONS.ENGLISH
+  }),
+  hindi: genAI.getGenerativeModel({ 
+    model: GEMINI_MODEL,
+    systemInstruction: SYSTEM_INSTRUCTIONS.HINDI
+  }),
+  braille: genAI.getGenerativeModel({ 
+    model: GEMINI_MODEL,
+    systemInstruction: SYSTEM_INSTRUCTIONS.BRAILLE
+  })
+};
 
 // Configure multer for file uploads
 const storage = multer.memoryStorage();
@@ -129,7 +145,52 @@ app.get("/api/db-status", async (req, res) => {
 
 // --- Optional Root Route ---
 app.get("/", (req, res) => {
-  res.send("Welcome to the AI Notes Maker Server (Gemini Powered) latest");
+  res.send("Welcome to the AI Notes Maker Server (Gemini Powered) - Multi-Language Support (English, Hindi, Braille)");
+});
+
+// --- Language-specific Notes Endpoint ---
+app.get("/generate-notes/:noteId/:language", async (req, res) => {
+  const { noteId, language } = req.params;
+  
+  if (!['english', 'hindi', 'braille'].includes(language)) {
+    return res.status(400).json({
+      error: 'Invalid language. Must be one of: english, hindi, braille'
+    });
+  }
+
+  try {
+    const dbConnected = await ensureDBConnection();
+    if (!dbConnected) {
+      return res.status(503).json({
+        error: 'Database not connected'
+      });
+    }
+
+    const Note = require('./models/Note');
+    const note = await Note.findById(noteId);
+    
+    if (!note) {
+      return res.status(404).json({
+        error: 'Note not found'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      note_id: noteId,
+      language: language,
+      generated_notes: note.generatedNotes[language],
+      detected_language: note.detectedLanguage,
+      detected_subject: note.detectedSubject,
+      created_at: note.createdAt
+    });
+  } catch (error) {
+    console.error('Error fetching language-specific note:', error);
+    res.status(500).json({
+      error: 'Failed to fetch note',
+      details: error.message
+    });
+  }
 });
 
 // --- Notes Generation Endpoint ---
@@ -309,82 +370,34 @@ Generate detailed, organized academic notes in ${detectedLanguage} language only
       return res.status(400).json({ error: 'Invalid input type. Must be "text" or "audio".' });
     }
 
-    // Generate content using Gemini
-    let result;
+    // Generate multi-language notes using the new system
+    console.log('🔄 Starting multi-language note generation...');
+    const multiLanguageResults = await generateMultiLanguageNotes(models.english, userPrompt, audioFile);
     
-    if (audioFile) {
-      // Include audio file in the request
-      result = await model.generateContent({
-        contents: [{ 
-          role: "user", 
-          parts: [
-            { text: userPrompt },
-            {
-              inlineData: {
-                mimeType: audioFile.mimetype,
-                data: audioFile.buffer.toString('base64')
-              }
-            }
-          ]
-        }],
-        generationConfig: {
-          temperature: 0.2,
-          topK: 40,
-          topP: 0.8,
-          maxOutputTokens: 2048,
-        },
-      });
-    } else {
-      // Text-only request
-      result = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          topK: 40,
-          topP: 0.8,
-          maxOutputTokens: 2048,
-        },
-      });
-    }
+    console.log('✅ Multi-language notes generated successfully');
+    console.log('📊 Processing time:', multiLanguageResults.processingTime, 'ms');
 
-    let generatedNotes = result.response.text();
-
-    // Validate and ensure the generated notes are in the correct language
-    // Decide the target language: if detection failed, force English
+    // Use English notes for language detection and validation
+    const generatedNotes = multiLanguageResults.english;
+    
+    // Ensure we store the language as detected or default to English
     const targetLanguage = (detectedLanguage && detectedLanguage !== "unknown") ? detectedLanguage : 'English';
-    try {
-      const languageValidationResult = await model.generateContent({
-        contents: [{ 
-          role: "user", 
-          parts: [{ 
-            text: `🚨 URGENT LANGUAGE CORRECTION TASK 🚨\n\nThe following text should be written in ${targetLanguage}.\n\nYou MUST ensure the ENTIRE text is in ${targetLanguage} ONLY. Do NOT include words from other languages.\n\nOriginal text to correct:\n"${generatedNotes}"\n\nReturn ONLY the corrected text in ${targetLanguage}.` 
-          }] 
-        }],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 2048,
-        },
-      });
-
-      const validatedNotes = languageValidationResult.response.text();
-      if (validatedNotes && validatedNotes.trim()) {
-        generatedNotes = validatedNotes.trim();
-        console.log("✅ Language validation and correction completed for", targetLanguage);
-      }
-    } catch (validationError) {
-      console.warn("Language validation failed, using original notes:", validationError.message);
-    }
-
-    // Ensure we store the language as the target language (English when unknown)
     detectedLanguage = targetLanguage;
 
-    // Prepare data for saving to database
+    // Prepare data for saving to database (multi-language)
     const noteData = {
       input_type: type,
-      generated_notes: generatedNotes,
+      generated_notes: {
+        english: multiLanguageResults.english,
+        hindi: multiLanguageResults.hindi,
+        braille: multiLanguageResults.braille
+      },
       detected_language: detectedLanguage,
       detected_subject: detectedSubject,
-      original_content: typeof content === 'string' ? content : (content.originalname || 'audio_file')
+      original_content: typeof content === 'string' ? content : (content.originalname || 'audio_file'),
+      original_language: detectedLanguage,
+      model_used: GEMINI_MODEL,
+      processing_time: multiLanguageResults.processingTime
     };
 
     // Ensure database connection
@@ -401,7 +414,12 @@ Generate detailed, organized academic notes in ${detectedLanguage} language only
           model_used: GEMINI_MODEL,
           detected_language: detectedLanguage,
           detected_subject: detectedSubject,
-          generated_notes: generatedNotes,
+          generated_notes: {
+            english: multiLanguageResults.english,
+            hindi: multiLanguageResults.hindi,
+            braille: multiLanguageResults.braille
+          },
+          processing_time: multiLanguageResults.processingTime,
           note_id: savedNote._id,
           saved_at: savedNote.createdAt
         });
@@ -414,7 +432,12 @@ Generate detailed, organized academic notes in ${detectedLanguage} language only
           model_used: GEMINI_MODEL,
           detected_language: detectedLanguage,
           detected_subject: detectedSubject,
-          generated_notes: generatedNotes,
+          generated_notes: {
+            english: multiLanguageResults.english,
+            hindi: multiLanguageResults.hindi,
+            braille: multiLanguageResults.braille
+          },
+          processing_time: multiLanguageResults.processingTime,
           note_id: null,
           save_error: "Notes generated but failed to save to database"
         });
@@ -427,7 +450,12 @@ Generate detailed, organized academic notes in ${detectedLanguage} language only
         model_used: GEMINI_MODEL,
         detected_language: detectedLanguage,
         detected_subject: detectedSubject,
-        generated_notes: generatedNotes,
+        generated_notes: {
+          english: multiLanguageResults.english,
+          hindi: multiLanguageResults.hindi,
+          braille: multiLanguageResults.braille
+        },
+        processing_time: multiLanguageResults.processingTime,
         note_id: null,
         database_status: "Database not connected - notes not saved"
       });

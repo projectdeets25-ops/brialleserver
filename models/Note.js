@@ -6,9 +6,20 @@ const noteSchema = new mongoose.Schema({
     required: true,
     enum: ['text', 'audio']
   },
+  // Multi-language support: store notes in three languages
   generatedNotes: {
-    type: String,
-    required: true
+    english: {
+      type: String,
+      required: true
+    },
+    hindi: {
+      type: String,
+      required: true
+    },
+    braille: {
+      type: String,
+      required: true
+    }
   },
   detectedLanguage: {
     type: String,
@@ -21,6 +32,26 @@ const noteSchema = new mongoose.Schema({
   originalContent: {
     type: String,
     default: ''
+  },
+  // Metadata for multi-language processing
+  processingMetadata: {
+    originalLanguage: {
+      type: String,
+      default: 'unknown'
+    },
+    translationModel: {
+      type: String,
+      default: 'gemini-2.5-flash-lite'
+    },
+    brailleGrade: {
+      type: String,
+      default: 'Grade2',
+      enum: ['Grade1', 'Grade2']
+    },
+    processingTime: {
+      type: Number, // milliseconds
+      default: 0
+    }
   },
   createdAt: {
     type: Date,
