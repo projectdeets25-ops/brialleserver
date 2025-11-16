@@ -68,7 +68,7 @@ class BrailleConverter {
   /**
    * Convert English text to UEB Grade 2 Braille
    * @param {string} text - Input text to convert
-   * @param {boolean} useGrade2 - Whether to use Grade 2 contractions (default: true)
+   * @param {boolean} useGrade2 - Whether to use Grade 2 contractions (default: true)gggg
    * @returns {string} - Braille text using Unicode Braille Patterns
    */
   textToBraille(text, useGrade2 = true) {
