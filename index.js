@@ -277,21 +277,186 @@ app.post("/generate-notes", upload.fields([
 
         // Rule-based keyword maps (ordered, each with a set of regexes)
         const subjectKeywords = [
-          { name: 'Mathematics', patterns: [/\b(algebra|calculus|integral|derivative|matrix|theorem|proof|equation|geometry|trigonometry|probability|statistics|mean|median|variance)\b/i] },
-          { name: 'Physics', patterns: [/\b(force|velocity|acceleration|quantum|electron|photon|momentum|energy|thermodynamics|entropy|relativity|gravity|newton)\b/i] },
-          { name: 'Chemistry', patterns: [/\b(chemical|molecule|reaction|stoichiometry|acid|base|ion|pH|organic|inorganic|oxidation|reduction|titration|covalent|ionic)\b/i] },
-          { name: 'Biology', patterns: [/\b(cell|dna|rna|genome|evolution|photosynthesis|enzyme|protein|organism|species|ecology|mitosis|meiosis|chromosome)\b/i] },
-          { name: 'Computer Science', patterns: [/\b(algorithm|data structure|binary|byte|cache|compiler|complexity|big o|hash map|tree|graph|neural network|machine learning|database|sql|nosql|tcp|http)\b/i] },
-          { name: 'Programming', patterns: [/\b(function|variable|loop|if statement|for loop|while loop|javascript|python|java|c\+\+|c#|golang|rust|typescript|api request|http request)\b/i] },
-          { name: 'History', patterns: [/\b(empire|war|revolution|kingdom|civilization|battle|treaty|colonial|ancient|medieval|timeline|histor)\b/i] },
-          { name: 'Geography', patterns: [/\b(river|mountain|continent|climate|latitude|longitude|archipelago|peninsula|plate tectonics|desert|ocean)\b/i] },
-          { name: 'Literature', patterns: [/\b(poem|novel|protagonist|antagonist|sonnet|metaphor|narrative|theme|character|literary)\b/i] },
-          { name: 'Language', patterns: [/\b(grammar|syntax|vocabulary|phonetics|morphology|linguistics|translation)\b/i] },
-          { name: 'Art', patterns: [/\b(painting|sculpture|canvas|gallery|artist|composition|color theory|perspective)\b/i] },
-          { name: 'Music', patterns: [/\b(melody|harmony|rhythm|composer|song|notation|scale|tempo|pitch)\b/i] },
-          { name: 'Sports', patterns: [/\b(match|tournament|score|goal|player|coach|athlete|stadium|league|sport)\b/i] },
-          { name: 'Entertainment', patterns: [/\b(movie|film|actor|actress|cinema|television|series|celebrity|show|media)\b/i] }
+          {
+            name: 'Mathematics',
+            patterns: [
+              /\b(math|mathematics|arithmetic|number theory|set theory|logic|discrete math)\b/i,
+              /\b(algebra|linear algebra|abstract algebra|group theory|ring theory|field theory|vector space)\b/i,
+              /\b(calculus|differentiation|integration|derivative|integral|limit|series|sequence|multivariable)\b/i,
+              /\b(geometry|euclidean|non-euclidean|analytic geometry|coordinate geometry|trigonometry|sin|cos|tan|radian|angle)\b/i,
+              /\b(matrix|vector|tensor|eigenvalue|eigenvector|determinant|rank|inverse)\b/i,
+              /\b(differential equation|ODE|PDE|fourier|laplace transform|heat equation|wave equation)\b/i,
+              /\b(probability|statistics|random|distribution|normal distribution|mean|median|mode|variance|std dev|bayesian)\b/i,
+              /\b(combinatorics|permutation|combination|graph theory|network|optimization)\b/i
+            ]
+          },
+        
+          {
+            name: 'Physics',
+            patterns: [
+              /\b(physics|physical science|mechanics|dynamics|kinematics)\b/i,
+              /\b(force|velocity|acceleration|momentum|energy|power|work|mass|torque|inertia|friction)\b/i,
+              /\b(gravity|newton|laws of motion|projectile|collision|center of mass)\b/i,
+              /\b(wave|oscillation|frequency|amplitude|interference|diffraction|resonance)\b/i,
+              /\b(light|optics|reflection|refraction|lens|mirror|optical)\b/i,
+              /\b(thermodynamics|heat|temperature|entropy|enthalpy|pressure|gas law)\b/i,
+              /\b(electric|magnetic|electromagnetic|charge|current|voltage|resistance|circuit|capacitance|inductance)\b/i,
+              /\b(quantum|electron|photon|proton|neutron|quark|spin|wavefunction)\b/i,
+              /\b(relativity|einstein|spacetime|special relativity|general relativity|speed of light)\b/i,
+              /\b(nuclear|radioactive|radiation|fusion|fission|decay)\b/i
+            ]
+          },
+        
+          {
+            name: 'Chemistry',
+            patterns: [
+              /\b(chemistry|chemical|chemist|analytical|physical chemistry)\b/i,
+              /\b(atom|element|ion|molecule|compound|mixture|solution)\b/i,
+              /\b(bond|ionic|covalent|metallic|polar|nonpolar|valence)\b/i,
+              /\b(organic|inorganic|biochemistry|functional group|alkane|alkene|alkyne|aromatic)\b/i,
+              /\b(acid|base|pH|titration|buffer|solubility)\b/i,
+              /\b(reaction|reactant|product|equilibrium|catalyst|rate|stoichiometry|oxidation|reduction|redox)\b/i,
+              /\b(chromatography|spectroscopy|IR|NMR|mass spectrometry)\b/i,
+              /\b(periodic table|electron configuration|orbital|quantum number)\b/i
+            ]
+          },
+        
+          {
+            name: 'Biology',
+            patterns: [
+              /\b(biology|life science|biological)\b/i,
+              /\b(cell|organelle|nucleus|mitochondria|ribosome|membrane)\b/i,
+              /\b(DNA|RNA|chromosome|genome|gene|allele|genetics|heredity)\b/i,
+              /\b(evolution|natural selection|adaptation|variation|speciation)\b/i,
+              /\b(photosynthesis|cellular respiration|ATP|chloroplast)\b/i,
+              /\b(protein|enzyme|amino acid|lipid|carbohydrate|metabolism)\b/i,
+              /\b(mitosis|meiosis|cell cycle|replication|transcription|translation)\b/i,
+              /\b(anatomy|physiology|organ|tissue|circulatory|respiratory|nervous)\b/i,
+              /\b(ecology|ecosystem|population|community|biosphere)\b/i,
+              /\b(microbiology|bacteria|virus|fungi|protist)\b/i
+            ]
+          },
+        
+          {
+            name: 'Computer Science',
+            patterns: [
+              /\b(computer science|cs|computation|informatics|IT)\b/i,
+              /\b(algorithm|data structure|graph|tree|heap|stack|queue|hash)\b/i,
+              /\b(binary|bit|byte|machine code|instruction|assembly)\b/i,
+              /\b(compiler|interpreter|runtime|virtual machine)\b/i,
+              /\b(complexity|big o|time complexity|space complexity)\b/i,
+              /\b(database|SQL|NoSQL|index|query|transaction|ACID)\b/i,
+              /\b(network|TCP|HTTP|UDP|protocol|IP|socket)\b/i,
+              /\b(machine learning|AI|neural network|deep learning|model|training|dataset)\b/i,
+              /\b(operating system|OS|kernel|process|thread|memory management)\b/i,
+              /\b(distributed system|microservice|cloud computing|virtualization)\b/i
+            ]
+          },
+        
+          {
+            name: 'Programming',
+            patterns: [
+              /\b(programming|coding|software development|script|scripting)\b/i,
+              /\b(function|method|variable|const|let|loop|for|while|if|else|switch)\b/i,
+              /\b(array|list|dictionary|map|stack|queue|pointer|reference)\b/i,
+              /\b(java|python|javascript|typescript|c\+\+|c#|go|golang|rust|php|ruby|swift|kotlin)\b/i,
+              /\b(api|rest|graphql|fetch|axios|http request|endpoint)\b/i,
+              /\b(oop|object oriented|class|inheritance|polymorphism)\b/i,
+              /\b(recursion|iteration|lambda|closure|callback|async|await|promise)\b/i,
+              /\b(compilation|debug|runtime|exception|stack trace)\b/i,
+            ]
+          },
+        
+          {
+            name: 'History',
+            patterns: [
+              /\b(history|historical|historiography)\b/i,
+              /\b(ancient|medieval|renaissance|modern era|industrial revolution)\b/i,
+              /\b(empire|civilization|dynasty|kingdom|republic)\b/i,
+              /\b(war|battle|revolution|treaty|conflict|rebellion)\b/i,
+              /\b(colonial|imperial|independence|nationalism)\b/i,
+              /\b(roman|greek|ottoman|byzantine|british empire)\b/i
+            ]
+          },
+        
+          {
+            name: 'Geography',
+            patterns: [
+              /\b(geography|geographic|geology|earth science)\b/i,
+              /\b(continent|country|region|territory|capital)\b/i,
+              /\b(latitude|longitude|equator|hemisphere|tropic|meridian)\b/i,
+              /\b(mountain|volcano|river|lake|ocean|desert|forest|plateau)\b/i,
+              /\b(climate|weather|temperature|precipitation|biome)\b/i,
+              /\b(plate tectonics|earthquake|tsunami)\b/i
+            ]
+          },
+        
+          {
+            name: 'Literature',
+            patterns: [
+              /\b(literature|literary|literary analysis|classic)\b/i,
+              /\b(poem|poetry|sonnet|stanza|rhyme|meter)\b/i,
+              /\b(novel|novella|short story|prose|drama|play|tragedy|comedy)\b/i,
+              /\b(character|protagonist|antagonist|plot|theme|motif|symbolism|narrative)\b/i,
+              /\b(author|writer|poet|essay)\b/i
+            ]
+          },
+        
+          {
+            name: 'Language',
+            patterns: [
+              /\b(language|linguistics|linguistic|philology)\b/i,
+              /\b(grammar|syntax|semantics|phonetics|phonology|morphology|pragmatics)\b/i,
+              /\b(vocabulary|lexicon|word root|etymology)\b/i,
+              /\b(translation|interpretation|bilingual|multilingual)\b/i
+            ]
+          },
+        
+          {
+            name: 'Art',
+            patterns: [
+              /\b(art|visual art|fine arts|artistic)\b/i,
+              /\b(painting|sculpture|drawing|sketch|illustration)\b/i,
+              /\b(canvas|palette|brush|oil paint|acrylic|watercolor)\b/i,
+              /\b(gallery|museum|exhibition|curator|installation)\b/i,
+              /\b(composition|perspective|color theory|contrast|symmetry)\b/i
+            ]
+          },
+        
+          {
+            name: 'Music',
+            patterns: [
+              /\b(music|musical|music theory)\b/i,
+              /\b(melody|harmony|rhythm|tempo|beat|pitch|scale|interval|chord)\b/i,
+              /\b(composer|songwriter|performer|instrumentalist)\b/i,
+              /\b(song|track|album|orchestra|band|choir|ensemble)\b/i,
+              /\b(piano|guitar|violin|drums|saxophone|vocal)\b/i
+            ]
+          },
+        
+          {
+            name: 'Sports',
+            patterns: [
+              /\b(sport|athletics|athlete|competitive)\b/i,
+              /\b(match|game|tournament|league|championship)\b/i,
+              /\b(score|goal|point|win|lose|draw)\b/i,
+              /\b(team|coach|referee|umpire|player)\b/i,
+              /\b(football|soccer|basketball|cricket|baseball|tennis|golf|volleyball|swimming|running)\b/i,
+            ]
+          },
+        
+          {
+            name: 'Entertainment',
+            patterns: [
+              /\b(entertainment|media|pop culture|showbiz)\b/i,
+              /\b(movie|film|cinema|blockbuster|trailer)\b/i,
+              /\b(actor|actress|director|producer|celebrity|influencer)\b/i,
+              /\b(tv|television|series|episode|sitcom|drama|reality show)\b/i,
+              /\b(music video|award show|performance)\b/i
+            ]
+          }
         ];
+        
 
         const matchCounts = {};
         for (const s of subjectKeywords) {
