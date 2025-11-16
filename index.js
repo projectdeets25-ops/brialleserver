@@ -266,28 +266,103 @@ app.post("/generate-notes", upload.fields([
     };
 
     // Function to detect subject from text content
+    // Strategy: 1) Rule-based keyword matching for determinism and speed.
+    //           2) If rules are inconclusive, use a stricter model prompt with normalization.
     const detectSubject = async (text) => {
       try {
-        const subjectResult = await model.generateContent({
-          contents: [{ 
-            role: "user", 
-            parts: [{ 
-              text: `Analyze this text and identify the academic subject it belongs to. Respond with ONLY one of these subjects: "Mathematics", "Physics", "Chemistry", "Biology", "Programming", "Computer Science", "History", "Geography", "Literature", "Language", "Art", "Music", "Sports", "Entertainment", "General". Do not include any other text or explanation:
+        // Quick guard: empty or very short text
+        if (!text || text.trim().length < 20) {
+          return "General";
+        }
 
-"${text.substring(0, 500)}"` 
-            }] 
-          }],
+        // Rule-based keyword maps (ordered, each with a set of regexes)
+        const subjectKeywords = [
+          { name: 'Mathematics', patterns: [/\b(algebra|calculus|integral|derivative|matrix|theorem|proof|equation|geometry|trigonometry|probability|statistics|mean|median|variance)\b/i] },
+          { name: 'Physics', patterns: [/\b(force|velocity|acceleration|quantum|electron|photon|momentum|energy|thermodynamics|entropy|relativity|gravity|newton)\b/i] },
+          { name: 'Chemistry', patterns: [/\b(chemical|molecule|reaction|stoichiometry|acid|base|ion|pH|organic|inorganic|oxidation|reduction|titration|covalent|ionic)\b/i] },
+          { name: 'Biology', patterns: [/\b(cell|dna|rna|genome|evolution|photosynthesis|enzyme|protein|organism|species|ecology|mitosis|meiosis|chromosome)\b/i] },
+          { name: 'Computer Science', patterns: [/\b(algorithm|data structure|binary|byte|cache|compiler|complexity|big o|hash map|tree|graph|neural network|machine learning|database|sql|nosql|tcp|http)\b/i] },
+          { name: 'Programming', patterns: [/\b(function|variable|loop|if statement|for loop|while loop|javascript|python|java|c\+\+|c#|golang|rust|typescript|api request|http request)\b/i] },
+          { name: 'History', patterns: [/\b(empire|war|revolution|kingdom|civilization|battle|treaty|colonial|ancient|medieval|timeline|histor)\b/i] },
+          { name: 'Geography', patterns: [/\b(river|mountain|continent|climate|latitude|longitude|archipelago|peninsula|plate tectonics|desert|ocean)\b/i] },
+          { name: 'Literature', patterns: [/\b(poem|novel|protagonist|antagonist|sonnet|metaphor|narrative|theme|character|literary)\b/i] },
+          { name: 'Language', patterns: [/\b(grammar|syntax|vocabulary|phonetics|morphology|linguistics|translation)\b/i] },
+          { name: 'Art', patterns: [/\b(painting|sculpture|canvas|gallery|artist|composition|color theory|perspective)\b/i] },
+          { name: 'Music', patterns: [/\b(melody|harmony|rhythm|composer|song|notation|scale|tempo|pitch)\b/i] },
+          { name: 'Sports', patterns: [/\b(match|tournament|score|goal|player|coach|athlete|stadium|league|sport)\b/i] },
+          { name: 'Entertainment', patterns: [/\b(movie|film|actor|actress|cinema|television|series|celebrity|show|media)\b/i] }
+        ];
+
+        const matchCounts = {};
+        for (const s of subjectKeywords) {
+          for (const p of s.patterns) {
+            if (p.test(text)) {
+              matchCounts[s.name] = (matchCounts[s.name] || 0) + 1;
+            }
+          }
+        }
+
+        const matchedSubjects = Object.keys(matchCounts).sort((a, b) => matchCounts[b] - matchCounts[a]);
+        // If a single clear match exists, return it
+        if (matchedSubjects.length === 1) {
+          return matchedSubjects[0];
+        }
+        // If top match is significantly stronger than second, choose it
+        if (matchedSubjects.length > 1) {
+          const top = matchedSubjects[0];
+          const second = matchedSubjects[1];
+          if (matchCounts[top] >= (matchCounts[second] * 1.5) && matchCounts[top] >= 1) {
+            return top;
+          }
+        }
+
+        // If rules were inconclusive, fall back to model with a strict, few-shot prompt
+        const allowed = ["Mathematics","Physics","Chemistry","Biology","Programming","Computer Science","History","Geography","Literature","Language","Art","Music","Sports","Entertainment","General"];
+        const examples = [
+          { text: "The derivative of sin x is cos x and we study limits and continuity.", label: "Mathematics" },
+          { text: "The heart pumps blood through the circulatory system and arteries.", label: "Biology" },
+          { text: "Designing RESTful APIs involves endpoints, HTTP verbs, and status codes.", label: "Computer Science" },
+          { text: "The Treaty of Versailles ended the First World War in 1919.", label: "History" }
+        ];
+
+        let exampleStr = "";
+        for (const ex of examples) {
+          exampleStr += `Text: "${ex.text}" -> ${ex.label}\n`;
+        }
+
+        const prompt = `You are an objective classifier. Respond with EXACTLY one of: ${allowed.join(", ")}. Examples:\n${exampleStr}\nNow analyze the text below and respond with ONLY the subject name (one of the allowed list), no explanation, no punctuation:\n\n"${text.substring(0, 1000)}"`;
+
+        const subjectResult = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 20,
+            temperature: 0.0,
+            maxOutputTokens: 8,
           },
         });
-        const detectedSubj = subjectResult.response.text().trim();
-        // Clean up any extra text that might come with the response
-        const cleanSubj = detectedSubj.split('\n')[0].split('.')[0].trim();
-        console.log("Raw subject detection:", detectedSubj);
-        console.log("Cleaned subject:", cleanSubj);
-        return cleanSubj;
+
+        const detectedSubjRaw = subjectResult.response.text().trim();
+        const cleanSubj = detectedSubjRaw.split('\n')[0].split('.')[0].trim();
+        console.log("Raw subject detection (model):", detectedSubjRaw);
+        console.log("Cleaned subject (model):", cleanSubj);
+
+        // Normalize model output to the allowed labels
+        for (const a of allowed) {
+          if (cleanSubj.toLowerCase() === a.toLowerCase()) return a;
+        }
+        // Map common variants
+        const variantMap = {
+          'cs': 'Computer Science',
+          'computer science': 'Computer Science',
+          'comp sci': 'Computer Science',
+          'programming': 'Programming'
+        };
+        const lc = cleanSubj.toLowerCase();
+        for (const k in variantMap) {
+          if (lc.includes(k)) return variantMap[k];
+        }
+
+        // If still unrecognized, default to General
+        return "General";
       } catch (error) {
         console.warn("Subject detection failed:", error.message);
         return "General";
