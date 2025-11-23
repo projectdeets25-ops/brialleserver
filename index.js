@@ -265,272 +265,237 @@ app.post("/generate-notes", upload.fields([
       }
     };
 
-    // Function to detect subject from text content
-    // Strategy: 1) Rule-based keyword matching for determinism and speed.
-    //           2) If rules are inconclusive, use a stricter model prompt with normalization.
+    // --- Ensemble subject detection (formatting, model, heuristic, decision, post-check)
+    function formatForSubjectDetection(raw) {
+      if (!raw || typeof raw !== 'string') return '';
+      const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (!lines.length) return '';
+      const title = lines.find(l => l.length < 120) || lines[0];
+      const headings = lines.filter(l => /^#+\s+/.test(l) || (l === l.toUpperCase() && l.split(' ').length < 8));
+      const mathRegex = /\\frac|\\int|sin\(|cos\(|tan\(|lim\b|\d+\s*=|=>|<=|>=/i;
+      const mathLines = lines.filter(l => mathRegex.test(l));
+      const unitRegex = /\b(m|cm|kg|mol|N|J|Hz|K|ppm)\b/i;
+      const unitLines = lines.filter(l => unitRegex.test(l));
+      const signalRegex = /\b(definition|theorem|proof|example|algorithm|reaction|exercise)\b/i;
+      const signalLines = lines.filter(l => signalRegex.test(l));
+      const head = lines.slice(0, 60);
+      const parts = [title, ...headings.slice(0,6), ...mathLines.slice(0,12), ...unitLines.slice(0,8), ...signalLines.slice(0,10), ...head];
+      return parts.filter(Boolean).join('\n').slice(0, 4000);
+    }
+
+    async function modelDetectSubject(modelClient, rawText, allowedSubjects) {
+      const excerpt = formatForSubjectDetection(rawText) || (rawText && rawText.substring(0,2000)) || '';
+      const allowedList = allowedSubjects.map(s => `"${s}"`).join(', ');
+      const prompt = `Identify ONE subject from: ${allowedList}. Reply with ONLY that subject (no extra text).\n\nExcerpt:\n"${excerpt}"`;
+
+      const resp = await modelClient.generateContent({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.0, maxOutputTokens: 40 }
+      });
+
+      return (resp.response.text() || '').split('\n')[0].trim();
+    }
+
+    function heuristicScores(text, keywordMap) {
+      const t = (text || '').toLowerCase();
+      const scores = {};
+      for (const [subject, kws] of Object.entries(keywordMap)) {
+        let score = 0;
+        for (const kw of kws) if (kw && t.includes(kw.toLowerCase())) score++;
+        scores[subject] = score;
+      }
+      return scores;
+    }
+
+    function decideSubject(modelLabel, scores, synonyms = {}) {
+      const normalized = modelLabel ? modelLabel.trim() : null;
+      const sorted = Object.entries(scores).sort((a,b) => b[1]-a[1]);
+      const top = sorted[0] || [null,0];
+      const second = sorted[1] || [null,0];
+      if (top[1] >= 3 && (top[1] - (second[1]||0) >= 2)) return top[0];
+      if (normalized) {
+        const lower = normalized.toLowerCase();
+        if (synonyms[lower]) return synonyms[lower];
+        if (Object.keys(scores).some(s => s.toLowerCase() === lower)) {
+          return Object.keys(scores).find(s => s.toLowerCase() === lower);
+        }
+      }
+      if (scores['Sports'] >= 2) return 'Sports';
+      if (top[1] > 0) return top[0];
+      return 'General';
+    }
+
+    function postDetectOverride(generatedNotes, originalContent, smallKeywordMap, currentSubject) {
+      const combined = ((generatedNotes||'') + '\n' + (typeof originalContent === 'string' ? originalContent : '')).toLowerCase();
+      for (const subj of Object.keys(smallKeywordMap)) {
+        if (combined.includes(subj.toLowerCase())) return subj;
+      }
+      const scores = {};
+      for (const [s, kws] of Object.entries(smallKeywordMap)) {
+        scores[s] = kws.reduce((acc, kw) => acc + (combined.includes(kw) ? 1 : 0), 0);
+      }
+      const sorted = Object.entries(scores).sort((a,b) => b[1]-a[1]);
+      if (sorted[0] && sorted[0][1] >= 2) return sorted[0][0];
+      return currentSubject;
+    }
+
+    const keywordMap = {
+      Mathematics: [
+        'algebra','calculus','integral','derivative','matrix','theorem','proof','equation','geometry','trigonometry',
+        'probability','statistics','mean','median','variance','limit','vector','tensor','differentiation','integration',
+        'logarithm','exponent','function','linear algebra','quadratic','polynomial','number theory','set theory','topology',
+        'complex numbers','factorization','inequality','series','sequence','arithmetic','geometric progression','graph theory',
+        'combinatorics','permutation','combination','optimization','probability distribution','regression','coordinate geometry',
+        'differential equations','multivariable calculus','z score','standard deviation','p value','chi square','binomial',
+        'normal distribution','integration by parts','laplace transform','fourier transform','hyperbola','ellipse'
+      ],
+    
+      Physics: [
+        'force','velocity','acceleration','quantum','electron','photon','momentum','energy','thermodynamics','entropy',
+        'relativity','gravity','newton','magnetism','electricity','voltage','current','resistance','magnetic field','wave',
+        'frequency','amplitude','optics','refraction','diffraction','nuclear','particle','mass','inertia','pressure',
+        'density','work','power','kinematics','dynamics','scalar','vector','torque','angular momentum','black hole',
+        'string theory','cosmology','astrophysics','plasma','superconductivity','circuit','charge','radiation','heat transfer',
+        'vacuum','friction','centripetal force','centrifugal force','harmonic motion','resonance','photoelectric effect','quantum field',
+        'uncertainty principle','higgs boson','fusion','fission'
+      ],
+      
+      Chemistry: [
+        'chemical','molecule','reaction','stoichiometry','acid','base','ion','ph','organic','inorganic',
+        'oxidation','reduction','titration','catalyst','enzyme','bond','covalent','ionic','metallic','hydrocarbon',
+        'polymer','solvent','solute','solution','precipitate','equilibrium','kinetics','thermochemistry','entropy',
+        'enthalpy','alkane','alkene','alkyne','aromatic','isomer','electronegativity','periodic table','atomic mass',
+        'valence','buffer','salt','ester','amine','aldehyde','ketone','carboxylic acid','spectroscopy','chromatography',
+        'nucleophile','electrophile','free radical','halogenation','hydrogen bond','pi bond','sigma bond','radioactivity',
+        'pKa','molarity','avogadro number','lattice energy'
+      ],
+      
+      Biology: [
+        'cell','dna','rna','genome','evolution','photosynthesis','enzyme','protein','organism','species',
+        'ecology','mitosis','meiosis','chromosome','mutation','gene','allele','protein synthesis','transcription','translation',
+        'ribosome','mitochondria','chloroplast','cell membrane','cytoplasm','nucleus','bacteria','virus','fungi',
+        'taxonomy','phylogeny','adaptation','natural selection','ecosystem','biosphere','population','microbiology','immunity',
+        'hormone','respiration','circulation','digestion','nervous system','endocrine system','genetic drift','stem cells',
+        'homeostasis','antibody','antigen','cloning','reproduction','fermentation','amino acid','lipid','carbohydrate','metabolism',
+        'epigenetics','symbiosis','cell division','pathogen'
+      ],      
+    
+      ComputerScience: [
+        'algorithm','data structure','binary','byte','cache','compiler','complexity','big o','hash map','tree',
+        'graph','neural network','machine learning','database','sql','operating system','cpu','ram','thread','process',
+        'parallelism','distributed systems','networking','encryption','compression','search algorithm','sorting','stack','queue',
+        'linked list','heap','priority queue','hashing','api','protocol','tcp','udp','rest','virtualization',
+        'cloud','container','docker','kubernetes','recursion','backtracking','dynamic programming','computer vision','nlp',
+        'deep learning','transformer','blockchain','gpu','query optimization','transactions','deadlock','load balancing','caching','filesystem'
+      ],
+    
+      Programming: [
+        'function','variable','loop','if statement','for loop','while loop','javascript','python','java','c++',
+        'c#','golang','rust','typescript','react','node','async','await','exception','class',
+        'object','inheritance','polymorphism','encapsulation','interface','pointer','reference','module','package','library',
+        'framework','mongo','firebase','api call','json','xml','debugging','testing','unit test','deployment',
+        'compiler','interpreter','lambda','closure','arrow function','promise','callback','rest parameters','vue','angular',
+        'sql query','regex','event listener','http request','version control','git','repository','branch','merge','websocket'
+      ],
+    
+      History: [
+        'empire','war','revolution','kingdom','civilization','battle','treaty','colonial','ancient','medieval',
+        'timeline','dynasty','monarchy','republic','reform','migration','trade route','industrialization','renaissance','crusades',
+        'constitution','independence','aristocracy','dictatorship','conquest','exploration','archeology','artifact','legacy','pharaoh',
+        'ottoman','roman','greek','byzantine','feudalism','slavery','imperialism','cold war','ww1','ww2',
+        'treaty of versailles','revolutionary war','french revolution','american revolution','cultural diffusion','silk road','mesopotamia','indus valley','viking','samurai',
+        'colonization','migration pattern','historical evidence','chronology','manuscript','census'
+      ],
+    
+      Geography: [
+        'river','mountain','continent','climate','latitude','longitude','plate tectonics','desert','ocean',
+        'forest','rainfall','weather','temperature','volcano','earthquake','glacier','island','archipelago','peninsula',
+        'valley','plateau','delta','coastline','erosion','soil','ecosystem','habitat','wind patterns','monsoon',
+        'tundra','savanna','tropics','equator','hemisphere','map','cartography','population density','urbanization','rural',
+        'bay','strait','fjord','reef','wetlands','basin','altitude','longitude','meridian','time zone',
+        'hydrology','biome','landform','climate change','global warming'
+      ],
+    
+      Literature: [
+        'poem','novel','protagonist','metaphor','narrative','theme','character','literary','plot','dialogue',
+        'setting','tone','symbolism','allegory','irony','satire','genre','short story','stanza','rhyme',
+        'verse','prose','critique','author','drama','tragedy','comedy','mythology','epic','fable',
+        'imagery','motif','climax','resolution','conflict','foreshadowing','alliteration','personification','hyperbole','onomatopoeia',
+        'biography','autobiography','memoir','novella','paradox','aphorism','manuscript','narrator','perspective','literary device',
+        'denouement','excerpt','annotation','figurative language','moral','theme development'
+      ],
+    
+      Language: [
+        'grammar','syntax','vocabulary','phonetics','morphology','translation','pronunciation','semantics','linguistics','dialect',
+        'accent','phonology','conjugation','sentence structure','verb','noun','adjective','adverb','preposition','article',
+        'phrase','clause','punctuation','orthography','etymology','dictionary','idiom','slang','colloquialism','lexicon',
+        'literal meaning','figurative meaning','context','native language','second language','bilingual','multilingual','speech','writing','reading',
+        'listening','fluency','tone','register','formal language','informal language','grammar rules','plural','singular','prefix',
+        'suffix','root word','translation accuracy','linguistic analysis','phonetic transcription'
+      ],
+    
+      Art: [
+        'painting','sculpture','canvas','gallery','artist','sketch','portrait','landscape','abstract','realism',
+        'watercolor','oil paint','acrylic','charcoal','perspective','shading','composition','contrast','palette','mural',
+        'exhibition','installation','modern art','renaissance','baroque','surrealism','impressionism','expressionism','pop art','digital art',
+        'illustration','graphic design','color theory','contour','line art','texture','form','shape','proportion','symmetry',
+        'aesthetics','calligraphy','visual art','drawing','design principles','art critique','collage','craft','concept art','mixed media'
+      ],
+    
+      Music: [
+        'melody','harmony','rhythm','composer','notation','scale','tempo','pitch','chord','song',
+        'instrument','guitar','piano','violin','vocals','drums','orchestra','band','beat','bass',
+        'treble','soprano','alto','tenor','baritone','measure','time signature','key signature','modulation','dynamics',
+        'crescendo','decrescendo','symphony','opera','genre','tuning','interval','octave','solfege','metronome',
+        'recording','mixing','mastering','audio','synthesis','sound wave','frequency','melodic line','riff','improvisation'
+      ],
+    
+      Sports: [
+        // General sports terminology
+        'match','tournament','score','goal','player','athlete','stadium','coach','team','league',
+        'referee','umpire','championship','training','workout','exercise','drill','competition','record','medal',
+        'fitness','endurance','strength','strategy','playoff','season','defense','offense','foul','penalty',
+        'tactics','teamwork','sportsmanship','warmup','stretching','injury','recovery','athletics','sprint','marathon',
+        'ball','field','court','arena','victory','defeat','ranking','practice','fans','tournament bracket',
+      
+        // Actual sports (added)
+        'football','soccer','basketball','cricket','tennis','badminton','table tennis','volleyball','baseball','softball',
+        'hockey','ice hockey','rugby','golf','swimming','boxing','mma','wrestling','karate','taekwondo',
+        'judo','archery','shooting','cycling','skating','skateboarding','surfing','rowing','kayaking','canoeing',
+        'gymnastics','track','field events','long jump','high jump','pole vault','javelin','discus','shot put','triathlon','biathlon',
+        'snowboarding','skiing','billiards','chess','esports','motorsport','formula 1','nascar','badminton doubles','boxing heavyweight'
+      ],
+      
+    
+      Entertainment: [
+        'movie','film','actor','television','series','celebrity','director','producer','script','scene',
+        'cinema','soundtrack','visual effects','comedy','drama','thriller','sci-fi','action','romance','animation',
+        'documentary','trailer','premiere','box office','streaming','platform','binge watch','episode','cinematography','editing',
+        'stunt','casting','hollywood','bollywood','broadway','theatre','improv','stand-up','music video','award show',
+        'reality show','sitcom','character arc','plot twist','fanbase','fandom','review','rating','screenplay','special effects'
+      ]
+    };
+    
+
+    const synonyms = {
+      'cs': 'Computer Science',
+      'computer science': 'Computer Science',
+      'comp sci': 'Computer Science',
+      'programming': 'Programming'
+    };
+
+    const smallKeywordMap = Object.fromEntries(Object.entries(keywordMap).map(([k,v]) => [k, v.slice(0,6)]));
+
     const detectSubject = async (text) => {
       try {
-        // Quick guard: empty or very short text
-        if (!text || text.trim().length < 20) {
-          return "General";
-        }
-
-        // Rule-based keyword maps (ordered, each with a set of regexes)
-        const subjectKeywords = [
-          {
-            name: 'Mathematics',
-            patterns: [
-              /\b(math|mathematics|arithmetic|number theory|set theory|logic|discrete math)\b/i,
-              /\b(algebra|linear algebra|abstract algebra|group theory|ring theory|field theory|vector space)\b/i,
-              /\b(calculus|differentiation|integration|derivative|integral|limit|series|sequence|multivariable)\b/i,
-              /\b(geometry|euclidean|non-euclidean|analytic geometry|coordinate geometry|trigonometry|sin|cos|tan|radian|angle)\b/i,
-              /\b(matrix|vector|tensor|eigenvalue|eigenvector|determinant|rank|inverse)\b/i,
-              /\b(differential equation|ODE|PDE|fourier|laplace transform|heat equation|wave equation)\b/i,
-              /\b(probability|statistics|random|distribution|normal distribution|mean|median|mode|variance|std dev|bayesian)\b/i,
-              /\b(combinatorics|permutation|combination|graph theory|network|optimization)\b/i
-            ]
-          },
-        
-          {
-            name: 'Physics',
-            patterns: [
-              /\b(physics|physical science|mechanics|dynamics|kinematics)\b/i,
-              /\b(force|velocity|acceleration|momentum|energy|power|work|mass|torque|inertia|friction)\b/i,
-              /\b(gravity|newton|laws of motion|projectile|collision|center of mass)\b/i,
-              /\b(wave|oscillation|frequency|amplitude|interference|diffraction|resonance)\b/i,
-              /\b(light|optics|reflection|refraction|lens|mirror|optical)\b/i,
-              /\b(thermodynamics|heat|temperature|entropy|enthalpy|pressure|gas law)\b/i,
-              /\b(electric|magnetic|electromagnetic|charge|current|voltage|resistance|circuit|capacitance|inductance)\b/i,
-              /\b(quantum|electron|photon|proton|neutron|quark|spin|wavefunction)\b/i,
-              /\b(relativity|einstein|spacetime|special relativity|general relativity|speed of light)\b/i,
-              /\b(nuclear|radioactive|radiation|fusion|fission|decay)\b/i
-            ]
-          },
-        
-          {
-            name: 'Chemistry',
-            patterns: [
-              /\b(chemistry|chemical|chemist|analytical|physical chemistry)\b/i,
-              /\b(atom|element|ion|molecule|compound|mixture|solution)\b/i,
-              /\b(bond|ionic|covalent|metallic|polar|nonpolar|valence)\b/i,
-              /\b(organic|inorganic|biochemistry|functional group|alkane|alkene|alkyne|aromatic)\b/i,
-              /\b(acid|base|pH|titration|buffer|solubility)\b/i,
-              /\b(reaction|reactant|product|equilibrium|catalyst|rate|stoichiometry|oxidation|reduction|redox)\b/i,
-              /\b(chromatography|spectroscopy|IR|NMR|mass spectrometry)\b/i,
-              /\b(periodic table|electron configuration|orbital|quantum number)\b/i
-            ]
-          },
-        
-          {
-            name: 'Biology',
-            patterns: [
-              /\b(biology|life science|biological)\b/i,
-              /\b(cell|organelle|nucleus|mitochondria|ribosome|membrane)\b/i,
-              /\b(DNA|RNA|chromosome|genome|gene|allele|genetics|heredity)\b/i,
-              /\b(evolution|natural selection|adaptation|variation|speciation)\b/i,
-              /\b(photosynthesis|cellular respiration|ATP|chloroplast)\b/i,
-              /\b(protein|enzyme|amino acid|lipid|carbohydrate|metabolism)\b/i,
-              /\b(mitosis|meiosis|cell cycle|replication|transcription|translation)\b/i,
-              /\b(anatomy|physiology|organ|tissue|circulatory|respiratory|nervous)\b/i,
-              /\b(ecology|ecosystem|population|community|biosphere)\b/i,
-              /\b(microbiology|bacteria|virus|fungi|protist)\b/i
-            ]
-          },
-        
-          {
-            name: 'Computer Science',
-            patterns: [
-              /\b(computer science|cs|computation|informatics|IT)\b/i,
-              /\b(algorithm|data structure|graph|tree|heap|stack|queue|hash)\b/i,
-              /\b(binary|bit|byte|machine code|instruction|assembly)\b/i,
-              /\b(compiler|interpreter|runtime|virtual machine)\b/i,
-              /\b(complexity|big o|time complexity|space complexity)\b/i,
-              /\b(database|SQL|NoSQL|index|query|transaction|ACID)\b/i,
-              /\b(network|TCP|HTTP|UDP|protocol|IP|socket)\b/i,
-              /\b(machine learning|AI|neural network|deep learning|model|training|dataset)\b/i,
-              /\b(operating system|OS|kernel|process|thread|memory management)\b/i,
-              /\b(distributed system|microservice|cloud computing|virtualization)\b/i
-            ]
-          },
-        
-          {
-            name: 'Programming',
-            patterns: [
-              /\b(programming|coding|software development|script|scripting)\b/i,
-              /\b(function|method|variable|const|let|loop|for|while|if|else|switch)\b/i,
-              /\b(array|list|dictionary|map|stack|queue|pointer|reference)\b/i,
-              /\b(java|python|javascript|typescript|c\+\+|c#|go|golang|rust|php|ruby|swift|kotlin)\b/i,
-              /\b(api|rest|graphql|fetch|axios|http request|endpoint)\b/i,
-              /\b(oop|object oriented|class|inheritance|polymorphism)\b/i,
-              /\b(recursion|iteration|lambda|closure|callback|async|await|promise)\b/i,
-              /\b(compilation|debug|runtime|exception|stack trace)\b/i,
-            ]
-          },
-        
-          {
-            name: 'History',
-            patterns: [
-              /\b(history|historical|historiography)\b/i,
-              /\b(ancient|medieval|renaissance|modern era|industrial revolution)\b/i,
-              /\b(empire|civilization|dynasty|kingdom|republic)\b/i,
-              /\b(war|battle|revolution|treaty|conflict|rebellion)\b/i,
-              /\b(colonial|imperial|independence|nationalism)\b/i,
-              /\b(roman|greek|ottoman|byzantine|british empire)\b/i
-            ]
-          },
-        
-          {
-            name: 'Geography',
-            patterns: [
-              /\b(geography|geographic|geology|earth science)\b/i,
-              /\b(continent|country|region|territory|capital)\b/i,
-              /\b(latitude|longitude|equator|hemisphere|tropic|meridian)\b/i,
-              /\b(mountain|volcano|river|lake|ocean|desert|forest|plateau)\b/i,
-              /\b(climate|weather|temperature|precipitation|biome)\b/i,
-              /\b(plate tectonics|earthquake|tsunami)\b/i
-            ]
-          },
-        
-          {
-            name: 'Literature',
-            patterns: [
-              /\b(literature|literary|literary analysis|classic)\b/i,
-              /\b(poem|poetry|sonnet|stanza|rhyme|meter)\b/i,
-              /\b(novel|novella|short story|prose|drama|play|tragedy|comedy)\b/i,
-              /\b(character|protagonist|antagonist|plot|theme|motif|symbolism|narrative)\b/i,
-              /\b(author|writer|poet|essay)\b/i
-            ]
-          },
-        
-          {
-            name: 'Language',
-            patterns: [
-              /\b(language|linguistics|linguistic|philology)\b/i,
-              /\b(grammar|syntax|semantics|phonetics|phonology|morphology|pragmatics)\b/i,
-              /\b(vocabulary|lexicon|word root|etymology)\b/i,
-              /\b(translation|interpretation|bilingual|multilingual)\b/i
-            ]
-          },
-        
-          {
-            name: 'Art',
-            patterns: [
-              /\b(art|visual art|fine arts|artistic)\b/i,
-              /\b(painting|sculpture|drawing|sketch|illustration)\b/i,
-              /\b(canvas|palette|brush|oil paint|acrylic|watercolor)\b/i,
-              /\b(gallery|museum|exhibition|curator|installation)\b/i,
-              /\b(composition|perspective|color theory|contrast|symmetry)\b/i
-            ]
-          },
-        
-          {
-            name: 'Music',
-            patterns: [
-              /\b(music|musical|music theory)\b/i,
-              /\b(melody|harmony|rhythm|tempo|beat|pitch|scale|interval|chord)\b/i,
-              /\b(composer|songwriter|performer|instrumentalist)\b/i,
-              /\b(song|track|album|orchestra|band|choir|ensemble)\b/i,
-              /\b(piano|guitar|violin|drums|saxophone|vocal)\b/i
-            ]
-          },
-        
-          {
-            name: 'Sports',
-            patterns: [
-              /\b(sport|athletics|athlete|competitive)\b/i,
-              /\b(match|game|tournament|league|championship)\b/i,
-              /\b(score|goal|point|win|lose|draw)\b/i,
-              /\b(team|coach|referee|umpire|player)\b/i,
-              /\b(football|soccer|basketball|cricket|baseball|tennis|golf|volleyball|swimming|running)\b/i,
-            ]
-          },
-        
-          {
-            name: 'Entertainment',
-            patterns: [
-              /\b(entertainment|media|pop culture|showbiz)\b/i,
-              /\b(movie|film|cinema|blockbuster|trailer)\b/i,
-              /\b(actor|actress|director|producer|celebrity|influencer)\b/i,
-              /\b(tv|television|series|episode|sitcom|drama|reality show)\b/i,
-              /\b(music video|award show|performance)\b/i
-            ]
-          }
-        ];
-        
-
-        const matchCounts = {};
-        for (const s of subjectKeywords) {
-          for (const p of s.patterns) {
-            if (p.test(text)) {
-              matchCounts[s.name] = (matchCounts[s.name] || 0) + 1;
-            }
-          }
-        }
-
-        const matchedSubjects = Object.keys(matchCounts).sort((a, b) => matchCounts[b] - matchCounts[a]);
-        // If a single clear match exists, return it
-        if (matchedSubjects.length === 1) {
-          return matchedSubjects[0];
-        }
-        // If top match is significantly stronger than second, choose it
-        if (matchedSubjects.length > 1) {
-          const top = matchedSubjects[0];
-          const second = matchedSubjects[1];
-          if (matchCounts[top] >= (matchCounts[second] * 1.5) && matchCounts[top] >= 1) {
-            return top;
-          }
-        }
-
-        // If rules were inconclusive, fall back to model with a strict, few-shot prompt
-        const allowed = ["Mathematics","Physics","Chemistry","Biology","Programming","Computer Science","History","Geography","Literature","Language","Art","Music","Sports","Entertainment","General"];
-        const examples = [
-          { text: "The derivative of sin x is cos x and we study limits and continuity.", label: "Mathematics" },
-          { text: "The heart pumps blood through the circulatory system and arteries.", label: "Biology" },
-          { text: "Designing RESTful APIs involves endpoints, HTTP verbs, and status codes.", label: "Computer Science" },
-          { text: "The Treaty of Versailles ended the First World War in 1919.", label: "History" }
-        ];
-
-        let exampleStr = "";
-        for (const ex of examples) {
-          exampleStr += `Text: "${ex.text}" -> ${ex.label}\n`;
-        }
-
-        const prompt = `You are an objective classifier. Respond with EXACTLY one of: ${allowed.join(", ")}. Examples:\n${exampleStr}\nNow analyze the text below and respond with ONLY the subject name (one of the allowed list), no explanation, no punctuation:\n\n"${text.substring(0, 1000)}"`;
-
-        const subjectResult = await model.generateContent({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.0,
-            maxOutputTokens: 8,
-          },
-        });
-
-        const detectedSubjRaw = subjectResult.response.text().trim();
-        const cleanSubj = detectedSubjRaw.split('\n')[0].split('.')[0].trim();
-        console.log("Raw subject detection (model):", detectedSubjRaw);
-        console.log("Cleaned subject (model):", cleanSubj);
-
-        // Normalize model output to the allowed labels
-        for (const a of allowed) {
-          if (cleanSubj.toLowerCase() === a.toLowerCase()) return a;
-        }
-        // Map common variants
-        const variantMap = {
-          'cs': 'Computer Science',
-          'computer science': 'Computer Science',
-          'comp sci': 'Computer Science',
-          'programming': 'Programming'
-        };
-        const lc = cleanSubj.toLowerCase();
-        for (const k in variantMap) {
-          if (lc.includes(k)) return variantMap[k];
-        }
-
-        // If still unrecognized, default to General
-        return "General";
-      } catch (error) {
-        console.warn("Subject detection failed:", error.message);
-        return "General";
+        const allowed = Object.keys(keywordMap);
+        const modelLabel = await modelDetectSubject(model, text, allowed);
+        const scores = heuristicScores(text, keywordMap);
+        const decided = decideSubject(modelLabel, scores, synonyms);
+        return decided;
+      } catch (err) {
+        console.warn('Subject detect ensemble failed:', err.message);
+        return 'General';
       }
     };
 
@@ -619,7 +584,15 @@ Generate detailed, organized academic notes in ${detectedLanguage} language only
 
     // Use English notes for language detection and validation
     const generatedNotes = multiLanguageResults.english;
-    
+
+    // Post-generation re-check: try to improve subject detection using generated notes + original content
+    try {
+      detectedSubject = postDetectOverride(multiLanguageResults.english, content, smallKeywordMap, detectedSubject);
+      console.log('Post-detection subject override result:', detectedSubject);
+    } catch (e) {
+      console.warn('Post-detect override failed:', e.message);
+    }
+
     // Ensure we store the language as detected or default to English
     const targetLanguage = (detectedLanguage && detectedLanguage !== "unknown") ? detectedLanguage : 'English';
     detectedLanguage = targetLanguage;
